@@ -1,0 +1,7 @@
+streamlit
+stmol
+py3Dmol
+requests
+numpy
+topoly
+ipython_genutils
