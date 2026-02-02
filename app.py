@@ -43,32 +43,17 @@ def sanitize_sequence(sequence):
     return clean_seq
 
 def calculate_plddt(pdb_path):
-    """
-    Reads the B-factor column (pLDDT) from the PDB file.
-    Auto-corrects 0-1 scale to 0-100 scale if needed.
-    """
     plddt_values = []
     try:
         with open(pdb_path, 'r') as f:
             for line in f:
                 if line.startswith("ATOM"):
                     try:
-                        # Extract B-factor (columns 60-66)
                         val = float(line[60:66].strip())
-                        # Filter out 0.00 which often indicates parsing errors
-                        if val > 0.01:
-                            plddt_values.append(val)
+                        plddt_values.append(val)
                     except ValueError: continue
-        
         if not plddt_values: return 0.0
-        
-        mean_plddt = np.mean(plddt_values)
-        
-        # AUTO-CORRECTION: If API returns 0-1 scale, convert to 0-100
-        if mean_plddt <= 1.0:
-            mean_plddt *= 100
-            
-        return mean_plddt
+        return np.mean(plddt_values)
     except Exception:
         return 0.0
 
