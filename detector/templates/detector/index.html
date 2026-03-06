@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Protein Knot Detector</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script>
+    <style>
+        /* Base Streamlit Dark Theme */
+        body { margin: 0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0e1117; color: #fafafa; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Sidebar layout */
+        .sidebar { width: 320px; background-color: #262730; padding: 30px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 15px; border-right: 1px solid #444; }
+        .sidebar h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 5px; }
+        .sidebar p { font-size: 0.9rem; color: #ddd; margin: 2px 0; line-height: 1.4; }
+        .sidebar hr { border: 0; height: 1px; background: #555; margin: 20px 0; }
+        .sidebar .caption { font-size: 0.8rem; color: #aaa; }
+
+        /* Main Content area */
+        .main-content { flex: 1; padding: 40px 60px; overflow-y: auto; box-sizing: border-box; }
+        h1 { font-size: 2.5rem; margin-top: 0; margin-bottom: 5px; font-weight: 700; }
+        .subtitle { font-size: 1.1rem; color: #bbb; margin-bottom: 30px; }
+
+        /* Info & Warning Panels */
+        .info-panel { background-color: #1e222d; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #4ca6ff; }
+        .info-panel h4 { margin-top: 0; color: #4ca6ff; }
+        .info-panel p, .info-panel li { font-size: 0.95rem; color: #ddd; line-height: 1.5; }
+        .warning-panel { background-color: #3b2a1a; padding: 15px 20px; border-radius: 8px; border-left: 4px solid #ff9800; margin-top: 15px; }
+        .warning-panel p { margin: 0; color: #ffd180; font-size: 0.9rem; font-weight: 500; }
+
+        /* Input Form */
+        label { display: block; margin-bottom: 10px; font-size: 0.9rem; font-weight: 500; }
+        textarea { width: 100%; max-width: 800px; padding: 15px; background-color: #262730; color: white; border: 1px solid #444; border-radius: 8px; font-family: monospace; font-size: 14px; box-sizing: border-box; resize: vertical; }
+        textarea:focus { outline: none; border-color: #ff4b4b; }
+        button { background-color: #ff4b4b; color: white; border: none; padding: 10px 24px; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 15px; font-weight: 500; transition: 0.2s; }
+        button:hover { background-color: #ff3333; }
+
+        /* Results Layout */
+        .results-container { display: flex; gap: 40px; margin-top: 40px; flex-wrap: wrap; }
+        .report-col { flex: 1; min-width: 250px; max-width: 400px; }
+        .viewer-col { flex: 2; min-width: 400px; }
+        
+        h2 { font-size: 1.8rem; margin-top: 0; margin-bottom: 25px; }
+        
+        /* Streamlit Metrics */
+        .metric { margin-bottom: 25px; }
+        .metric-label { font-size: 0.9rem; color: #bbb; margin-bottom: 5px; }
+        .metric-value { font-size: 2.5rem; font-weight: 600; margin: 0; }
+
+        /* Alert Badges */
+        .alert { padding: 15px; border-radius: 6px; margin-bottom: 15px; font-weight: 500; }
+        .alert-warning { background-color: #3b3a1a; color: #d4d055; border: 1px solid #5a5822; }
+        .alert-danger { background-color: #3b1a1a; color: #ff6b6b; border: 1px solid #5a2222; }
+        .alert-success { background-color: #1a3b22; color: #55d475; border: 1px solid #225a33; }
+
+        /* 3D Viewer Box */
+        .viewer-box { background-color: white; border-radius: 8px; overflow: hidden; height: 400px; width: 100%; border: 1px solid #444; position: relative;}
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h3>System Specifications</h3>
+        <p><strong>Structure Engine:</strong> ESMFold API</p>
+        <p><strong>Topology Algorithm:</strong> Alexander Polynomial</p>
+        <p><strong>Sampling:</strong> 1000 Stochastic Closures</p>
+        <hr>
+        <p class="caption">Powered by Topoly & ESMAtlas</p>
+    </div>
+
+    <div class="main-content">
+        <h1>Protein Knot Detector</h1>
+        <div class="subtitle">Automated Topological Analysis Pipeline</div>
+
+        <div class="info-panel">
+            <h4>About the Tool</h4>
+            <p>This pipeline predicts 3D protein structures from raw FASTA sequences and analyzes their mathematical topology to detect complex knots.</p>
+            <p><strong>How it works:</strong></p>
+            <ol>
+                <li><strong>Structure Prediction:</strong> ESMFold predicts the 3D atomic coordinates.</li>
+                <li><strong>Topology Analysis:</strong> The Topoly library computes the Alexander Polynomial using 1,000 stochastic closures.</li>
+            </ol>
+            <div class="warning-panel">
+                <p>⚠️ NOTE: For proteins over 400 residues, a sliding window approach is used. This can occasionally result in false negatives if a knotted region falls exactly across a window boundary.</p>
+            </div>
+        </div>
+
+        <label>Enter Sequence (FASTA format):</label>
+        <form method="POST">
+            {% csrf_token %}
+            <textarea name="sequence" rows="4" required>{{ sequence }}</textarea>
+            <button type="submit">Run Analysis</button>
+        </form>
+
+        {% if success %}
+        <div class="results-container">
+            
+            <div class="report-col">
+                <h2>Analysis Report</h2>
+                
+                <div class="metric">
+                    <div class="metric-label">Structure Quality (pLDDT)</div>
+                    <div class="metric-value">{{ quality }}</div>
+                </div>
+                
+                <div class="metric">
+                    <div class="metric-label">Knot Probability</div>
+                    <div class="metric-value">{{ knot_prob }}%</div>
+                </div>
+
+                {% if quality < 70 %}
+                <div class="alert alert-warning">Low Confidence Structure</div>
+                {% endif %}
+
+                {% if is_knotted %}
+                <div class="alert alert-danger">Knot Detected: {{ knot_type }}</div>
+                {% else %}
+                <div class="alert alert-success">Unknotted (0_1)</div>
+                {% endif %}
+            </div>
+
+            <div class="viewer-col">
+                <h2>3D Structure</h2>
+                <div id="mol-viewer" class="viewer-box"></div>
+            </div>
+
+        </div>
+
+        <script>
+            // We safely load the PDB string passed from Django
+            const pdbData = `{{ pdb_data|safe }}`;
+            
+            if (pdbData && pdbData.trim() !== "") {
+                // Initialize 3Dmol.js viewer
+                let viewer = $3Dmol.createViewer("mol-viewer", {backgroundColor: "white"});
+                viewer.addModel(pdbData, "pdb");
+                viewer.setStyle({}, {cartoon: {color: 'spectrum'}});
+                viewer.zoomTo();
+                viewer.render();
+            }
+        </script>
+        {% endif %}
+
+        {% if error %}
+        <div class="results-container">
+            <div class="alert alert-danger" style="width: 100%;">
+                <strong>Pipeline Error:</strong> {{ error }}
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</body>
+</html>
