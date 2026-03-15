@@ -104,7 +104,7 @@
                 
                 <div class="metric">
                     <div class="metric-label">Knot Probability</div>
-                    <div class="metric-value">{{ knot_prob }}%</div>
+                    <div class="metric-value">{{ knot_prob_display }}{% if knot_prob_is_percent %}%{% endif %}</div>
                 </div>
 
                 {% if quality < 70 %}

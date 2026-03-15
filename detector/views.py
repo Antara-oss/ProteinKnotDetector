@@ -1,9 +1,12 @@
+import tempfile
+import uuid
+from pathlib import Path
+
+import numpy as np
 import requests
 import topoly
-import os
-import sys
 import urllib3
-import numpy as np
+from django.shortcuts import render
 
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -13,15 +16,34 @@ API_ENDPOINT = "https://api.esmatlas.com/foldSequence/v1/pdb/"
 MINIMUM_PLDDT = 70.0
 SAMPLING_ITERATIONS = 1000
 KNOT_THRESHOLD = 0.50
+REQUEST_TIMEOUT = 120
+STANDARD_AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
 
 # --- SLIDING WINDOW SETTINGS (TUNED FOR FREE API) ---
 WINDOW_SIZE = 400    # Lowered to 400 to avoid Error 413
 OVERLAP = 200        # Keeps context between chunks
 
+
+def sanitize_sequence(raw_sequence):
+    lines = []
+    for line in raw_sequence.splitlines():
+        line = line.strip()
+        if not line or line.startswith(">"):
+            continue
+        lines.append(line)
+
+    sequence = "".join(lines).upper()
+    return "".join(char for char in sequence if char in STANDARD_AMINO_ACIDS)
+
 def retrieve_structure(sequence, filename):
     sequence = sequence.replace("\n", "").replace(" ", "").strip()
     try:
-        response = requests.post(API_ENDPOINT, data=sequence, verify=False)
+        response = requests.post(
+            API_ENDPOINT,
+            data=sequence,
+            verify=False,
+            timeout=REQUEST_TIMEOUT,
+        )
         if response.status_code == 200:
             with open(filename, "w") as f:
                 f.write(response.text)
@@ -49,7 +71,8 @@ def calculate_plddt(pdb_path):
         if not plddt_values: return 0.0
         mean = np.mean(plddt_values)
         return mean * 100 if mean <= 1.0 else mean
-    except: return 0.0
+    except:
+        return 0.0
 
 def run_topology_analysis(pdb_path):
     try:
@@ -59,13 +82,13 @@ def run_topology_analysis(pdb_path):
         prob_unknotted = alex_dist.get('0_1', 0.0)
         prob_knotted = 1.0 - prob_unknotted
         dominant_knot = max(alex_dist, key=alex_dist.get)
-        
         return dominant_knot, 0, prob_knotted
-    except: return None, 0, 0
+    except:
+        return None, 0, 0
 
-def analyze_chunk(sequence, start_index, end_index):
+def analyze_chunk(sequence, start_index, end_index, work_dir):
     chunk_id = f"fragment_{start_index}_{end_index}"
-    filename = f"{chunk_id}.pdb"
+    filename = Path(work_dir) / f"{chunk_id}.pdb"
     
     print(f"\n[INFO] Processing Fragment: Residues {start_index} to {end_index}")
     
@@ -80,11 +103,11 @@ def analyze_chunk(sequence, start_index, end_index):
         
         # Return True only if knot is detected AND reliable
         if prob > KNOT_THRESHOLD:
-            return True, knot_type, plddt, filename
+            return True, knot_type, plddt
         
-    return False, None, 0, None
+    return False, None, 0
 
-def run_sliding_window(full_sequence):
+def run_sliding_window(full_sequence, work_dir):
     seq_len = len(full_sequence)
     print(f"[INFO] Large sequence detected ({seq_len} > 400).")
     print(f"[INFO] Engaging Sliding Window Mode (Window={WINDOW_SIZE}, Overlap={OVERLAP})")
@@ -100,7 +123,7 @@ def run_sliding_window(full_sequence):
         if (end - start) < 50: break
             
         sub_seq = full_sequence[start:end]
-        is_knotted, k_type, qual, fname = analyze_chunk(sub_seq, start+1, end)
+        is_knotted, k_type, qual = analyze_chunk(sub_seq, start+1, end, work_dir)
         
         if is_knotted:
             knots_found.append({
@@ -118,53 +141,54 @@ if __name__ == "__main__":
 # ==========================================
 # DJANGO WEB BRIDGE
 # ==========================================
-from django.shortcuts import render
-import uuid
-
 def index(request):
     context = {}
     if request.method == "POST":
-        sequence = request.POST.get("sequence", "").replace("\n", "").replace(" ", "").strip()
-        context['sequence'] = sequence
+        raw_sequence = request.POST.get("sequence", "")
+        sequence = sanitize_sequence(raw_sequence)
+
+        context['sequence'] = raw_sequence
         context['sequence_length'] = len(sequence)
 
-        if sequence:
-            if len(sequence) > 400:
-                # FEEDS INTO YOUR EXACT SLIDING WINDOW FUNCTION
-                results = run_sliding_window(sequence)
-                
-                if results:
-                    best = results[0]
-                    context['quality'] = round(best['quality'], 1)
-                    context['knot_prob'] = "Detected in chunk"
-                    context['knot_type'] = best['type']
-                    context['is_knotted'] = True
-                    context['success'] = True
-                else:
-                    context['error'] = "No knots detected in any fragment."
-            else:
-                # FEEDS INTO YOUR EXACT STANDARD FUNCTIONS
-                run_id = str(uuid.uuid4())[:8]
-                fname = f"web_result_{run_id}.pdb"
-                pdb_file = retrieve_structure(sequence, fname)
-                
-                if pdb_file:
-                    qual = calculate_plddt(fname)
-                    k_type, _, prob = run_topology_analysis(fname)
+        if raw_sequence and not sequence:
+            context['error'] = "No valid amino acid sequence was found in the FASTA input."
+        elif sequence:
+            with tempfile.TemporaryDirectory(prefix="protein-knot-") as temp_dir:
+                if len(sequence) > 400:
+                    results = run_sliding_window(sequence, temp_dir)
                     
-                    context['quality'] = round(qual, 1)
-                    context['knot_prob'] = round(prob * 100, 1)
-                    context['knot_type'] = k_type if prob > KNOT_THRESHOLD else "Unknotted"
-                    context['is_knotted'] = prob > KNOT_THRESHOLD
-                    context['success'] = True
-                    
-                    try:
-                        with open(fname, "r") as f:
-                            context['pdb_data'] = f.read()
-                        os.remove(fname)
-                    except:
-                        pass
+                    if results:
+                        best = results[0]
+                        context['quality'] = round(best['quality'], 1)
+                        context['knot_prob_display'] = "Detected in fragment"
+                        context['knot_prob_is_percent'] = False
+                        context['knot_type'] = best['type']
+                        context['is_knotted'] = True
+                        context['success'] = True
+                    else:
+                        context['error'] = "No knots detected in any fragment."
                 else:
-                    context['error'] = "ESMFold API Error or Connection Failed."
+                    run_id = str(uuid.uuid4())[:8]
+                    fname = Path(temp_dir) / f"web_result_{run_id}.pdb"
+                    pdb_file = retrieve_structure(sequence, fname)
+                    
+                    if pdb_file:
+                        qual = calculate_plddt(pdb_file)
+                        k_type, _, prob = run_topology_analysis(pdb_file)
+                        
+                        context['quality'] = round(qual, 1)
+                        context['knot_prob_display'] = round(prob * 100, 1)
+                        context['knot_prob_is_percent'] = True
+                        context['knot_type'] = k_type if prob > KNOT_THRESHOLD else "Unknotted"
+                        context['is_knotted'] = prob > KNOT_THRESHOLD
+                        context['success'] = True
+                        
+                        try:
+                            with open(pdb_file, "r") as f:
+                                context['pdb_data'] = f.read()
+                        except OSError:
+                            pass
+                    else:
+                        context['error'] = "ESMFold API Error or Connection Failed."
                     
     return render(request, 'detector/index.html', context)
